@@ -1,0 +1,156 @@
+as of 10/11/2016 
+
+from dronekit import connect, VehicleMode, LocationGlobalRelative
+from pymavlink import mavutil
+import time
+import copterFunction
+import argparse
+import re
+
+def printAttributes():
+	#print "Global Location (relative altitude): %s" % vehicle.location.global_relative_frame
+	print "Altitude relative to home_location: %s" % vehicle.location.global_relative_frame.alt
+	#print " Local Location: %s" % vehicle.location.local_frame
+	print " Battery: %s" % vehicle.battery
+	print " Attitude: %s" % vehicle.attitude
+
+
+def condition_yaw(heading, relative=False):
+   
+    if relative:
+        is_relative = 1 #yaw relative to direction of travel
+    else:
+        is_relative = 0 #yaw is an absolute angle
+    
+    msg = vehicle.message_factory.command_long_encode(
+        0, 0,    # target system, target component
+        mavutil.mavlink.MAV_CMD_CONDITION_YAW, #command
+        0, #confirmation
+        heading,    # param 1, yaw in degrees
+        0,          # param 2, yaw speed deg/s
+        1,          # param 3, direction -1 ccw, 1 cw
+        is_relative, # param 4, relative offset 1, absolute angle 0
+        0, 0, 0)    # param 5 ~ 7 not used
+    # send command to vehicle
+    vehicle.send_mavlink(msg)
+
+
+
+def send_ned_velocity(velocity_x, velocity_y, velocity_z, duration):
+    """
+    Move vehicle in direction based on specified velocity vectors.
+    """
+    msg = vehicle.message_factory.set_position_target_local_ned_encode(
+        0,       # time_boot_ms (not used)
+        0, 0,    # target system, target component
+        #mavutil.mavlink.MAV_FRAME_LOCAL_NED, # frame relative to earth's heading
+        mavutil.mavlink.MAV_FRAME_BODY_NED, #frame relative to the nose's heading 
+        0b0000111111000111, # type_mask (only speeds enabled)
+        0, 0, 0, # x, y, z positions (not used)
+        velocity_x, velocity_y, velocity_z, # x, y, z velocity in m/s
+        0, 0, 0, # x, y, z acceleration (not supported yet, ignored in GCS_Mavlink)
+        0, 0)    # yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
+
+
+    # send command to vehicle on 1 Hz cycle
+    for x in range(0,duration):
+        vehicle.send_mavlink(msg)
+        time.sleep(1)
+
+def takeOff(aTargetAltitude):
+	print "Taking off!"
+	vehicle.simple_takeoff(aTargetAltitude) # Take off to target altitude
+
+	# Check that vehicle has reached takeoff altitude
+	while True:
+		print " Altitude: ", vehicle.location.global_relative_frame.alt 
+		#Break and return from function just below target altitude.        
+		if vehicle.location.global_relative_frame.alt>=aTargetAltitude*0.95: 
+		  print "Reached target altitude"
+		  break
+		time.sleep(1)
+		
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--connect', default='127.0.0.1:14550')
+args = parser.parse_args()
+
+
+
+# Connect to the Vehicle
+print 'Connecting to vehicle on: %s' % args.connect
+vehicle = connect(args.connect, baud=57600, wait_ready=True)
+
+#1 to enable, 0 to disable all arming check parameters
+vehicle.parameters['ARMING_CHECK']=0
+print "Arming check status:  %s" % vehicle.parameters['ARMING_CHECK']
+
+
+print "Arming motors"
+vehicle.mode    = VehicleMode("GUIDED")
+vehicle.armed   = True
+
+while not vehicle.armed:
+	vehicle.armed   = True
+	print " Waiting for arming..."
+	time.sleep(1)
+
+if vehicle.armed == True:
+	print "Copter is armed"
+	
+printAttributes()
+
+#test
+
+print " Attitude: %s" % vehicle.attitude
+vehicleAttitude = str (vehicle.attitude)
+vehicleAttitude = re.findall(r"-?\d.\d+", vehicleAttitude)
+startupPitch = vehicleAttitude[0]
+startupYaw = vehicleAttitude[1]
+startupRoll = vehicleAttitude[2]
+print "Startup pitch: %s" % startupPitch
+print "Startup yaw: %s" % startupYaw
+print "Startup roll %s" % startupRoll 
+#ends test
+
+print ("Taking off to 10 meter")
+takeOff(10)
+
+# vx > 0 => fly North
+# vx < 0 => fly South
+North = 5 #up
+South = -5 #down
+# vy > 0 => fly East
+# vy < 0 => fly West
+West = -5  #left
+East = 5 #right
+
+DURATION = 5
+
+print("Velocity South")
+send_ned_velocity(South,0,0,DURATION)
+send_ned_velocity(0,0,0,1)
+
+print("Velocity West")
+send_ned_velocity(0,West,0,DURATION)
+send_ned_velocity(0,0,0,1)
+
+print("Yaw 90 absolute (East)")
+condition_yaw(90)
+time.sleep(5)
+
+print("Velocity North")
+send_ned_velocity(North,0,0,DURATION)
+send_ned_velocity(0,0,0,1)
+
+print("Velocity East")
+send_ned_velocity(0,East,0,DURATION)
+send_ned_velocity(0,0,0,1)
+
+print "Time to land"
+vehicle.mode = VehicleMode("LAND")
+
+
+# Close vehicle object
+vehicle.close()
+
